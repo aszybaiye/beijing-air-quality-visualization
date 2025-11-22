@@ -27,7 +27,7 @@ def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
         df["date"] = df["datetime"].dt.date
         df["weekday"] = df["datetime"].dt.weekday
         df["hour_of_day"] = df["datetime"].dt.hour
-        df["month"] = df["datetime"].dt.month  # 保证有 month
+        df["month"] = df["datetime"].dt.month  # 保证有 month 列
     return df
 
 
@@ -66,6 +66,7 @@ def load_beijing_data_from_path(zip_path: str) -> pd.DataFrame:
 def show_basic_info(df: pd.DataFrame):
     st.subheader("Basic Information / 数据基本信息")
     st.write(f"数据维度：{df.shape[0]} 行 × {df.shape[1]} 列")
+
     st.write("前 5 行：")
     st.dataframe(df.head())
 
@@ -111,11 +112,19 @@ def show_pm25_time_series_and_boxplot(df: pd.DataFrame):
     st.subheader("PM2.5 Time Series & Monthly Boxplot")
 
     stations = sorted(df["station"].dropna().unique().tolist())
+    if not stations:
+        st.warning("当前筛选条件下没有任何站点数据。")
+        return
+
     default_index = stations.index("Aotizhongxin") if "Aotizhongxin" in stations else 0
     station = st.selectbox("选择站点 / Select station", stations, index=default_index)
 
     subset = df[df["station"] == station].copy()
     subset = subset.dropna(subset=["datetime"])
+    if subset.empty:
+        st.warning("该站点在当前筛选条件下没有数据。")
+        return
+
     subset = subset.set_index("datetime").sort_index()
 
     # 时间序列（日均）
@@ -160,22 +169,97 @@ def show_correlation_heatmap(df: pd.DataFrame):
     st.pyplot(fig)
 
 
+def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    侧边栏筛选：
+    - 多选站点
+    - 时间范围
+    返回筛选后的 DataFrame
+    """
+    st.sidebar.header("数据筛选 / Filters")
+    df = df.copy()
+
+    # 按站点筛选
+    if "station" in df.columns:
+        stations = sorted(df["station"].dropna().unique().tolist())
+        if stations:
+            default_stations = stations[:3] if len(stations) > 3 else stations
+            selected_stations = st.sidebar.multiselect(
+                "选择站点 / Select station(s)",
+                stations,
+                default=default_stations
+            )
+            if selected_stations:
+                df = df[df["station"].isin(selected_stations)]
+
+    # 按时间范围筛选
+    if "datetime" in df.columns:
+        df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+        valid_dt = df["datetime"].dropna()
+        if not valid_dt.empty:
+            min_date = valid_dt.min().date()
+            max_date = valid_dt.max().date()
+
+            date_range = st.sidebar.date_input(
+                "选择时间范围 / Date range",
+                (min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+
+            # 可能是单个日期或元组，这里统一成 (start, end)
+            if isinstance(date_range, tuple) or isinstance(date_range, list):
+                start_date, end_date = date_range
+            else:
+                start_date = end_date = date_range
+
+            mask = (
+                df["datetime"].dt.date >= start_date
+            ) & (
+                df["datetime"].dt.date <= end_date
+            )
+            df = df[mask]
+
+    return df
+
+
+def show_kpi(df: pd.DataFrame):
+    """
+    显示当前筛选条件下的一些关键指标（KPI）。
+    """
+    st.subheader("当前筛选条件下的指标 / KPIs")
+
+    col1, col2, col3 = st.columns(3)
+
+    if "PM2.5" in df.columns and not df["PM2.5"].dropna().empty:
+        pm25_mean = df["PM2.5"].mean()
+        pm25_max = df["PM2.5"].max()
+        col1.metric("平均 PM2.5", f"{pm25_mean:.1f}")
+        col2.metric("最大 PM2.5", f"{pm25_max:.1f}")
+    else:
+        col1.metric("平均 PM2.5", "N/A")
+        col2.metric("最大 PM2.5", "N/A")
+
+    col3.metric("样本数 / Records", f"{len(df)}")
+
+
 def main():
     st.title("Beijing Multi-Site Air Quality Visualization")
+
     st.markdown(
         """
-        这个应用基于 **Beijing Multi-Site Air-Quality Data Set**，  
+        本应用基于 **Beijing Multi-Site Air-Quality Data Set**，  
         提供常见的预处理与可视化操作，用于课程《数据可视化》 / 数据分析学习展示。
 
-        **使用说明：**
-
-        - 左侧可以选择数据来源（本地 ZIP 或上传 ZIP）
-        - 右侧展示数据基本信息、缺失值、分布、时间序列和相关性热力图
+        - 左侧选择数据来源（本地 ZIP 或上传 ZIP）
+        - 可以按站点、时间范围进行筛选
+        - 顶部展示当前筛选下的关键指标（KPI）
+        - 通过标签页查看概览、分布、时间序列和相关性
         """
     )
 
+    # 1. 加载数据
     st.sidebar.header("数据来源 / Data Source")
-
     mode = st.sidebar.radio(
         "选择数据加载方式 / Choose how to load data",
         ("使用本地 ZIP 文件（与脚本同目录）", "通过浏览器上传 ZIP 文件"),
@@ -210,26 +294,45 @@ def main():
         st.info("请先在左侧选择数据来源并成功加载数据。")
         st.stop()
 
-    # 1. 数据基本信息
-    show_basic_info(df)
+    # 2. 应用交互筛选
+    df_filtered = apply_filters(df)
+
+    st.markdown(
+        f"当前筛选后共有 **{len(df_filtered)}** 条记录。"
+    )
+
+    # 3. KPI 指标
+    show_kpi(df_filtered)
+
+    if df_filtered.empty:
+        st.warning("当前筛选条件下没有数据，请调整筛选条件。")
+        st.stop()
 
     st.markdown("---")
 
-    # 2. 缺失值矩阵（可选）
-    if st.checkbox("显示缺失值矩阵 / Show missing data matrix"):
-        show_missing_matrix(df)
-        st.markdown("---")
+    # 4. Tabs 展示不同分析模块
+    tab_overview, tab_distribution, tab_time, tab_corr = st.tabs(
+        ["Overview", "Distribution & Missing", "Time Series", "Correlation"]
+    )
 
-    # 3. 污染物直方图
-    show_pollutant_hist(df)
-    st.markdown("---")
+    with tab_overview:
+        st.markdown("### 数据概览 / Data Overview")
+        show_basic_info(df_filtered)
 
-    # 4. PM2.5 时间序列 & 箱线图
-    show_pm25_time_series_and_boxplot(df)
-    st.markdown("---")
+    with tab_distribution:
+        st.markdown("### 分布与缺失值 / Distribution & Missing")
+        if st.checkbox("显示缺失值矩阵 / Show missing data matrix", key="missing_tab"):
+            show_missing_matrix(df_filtered)
+            st.markdown("---")
+        show_pollutant_hist(df_filtered)
 
-    # 5. 相关性热力图
-    show_correlation_heatmap(df)
+    with tab_time:
+        st.markdown("### 时间序列与箱线图 / Time Series & Boxplot")
+        show_pm25_time_series_and_boxplot(df_filtered)
+
+    with tab_corr:
+        st.markdown("### 相关性分析 / Correlation Analysis")
+        show_correlation_heatmap(df_filtered)
 
 
 if __name__ == "__main__":
