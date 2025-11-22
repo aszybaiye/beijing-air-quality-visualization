@@ -63,6 +63,20 @@
   - `seaborn`
   - `missingno`
 
+## 示例图像
+
+### 缺失值可视化
+
+![Missing matrix](figures/missing_matrix.png)
+
+### PM2.5 分布直方图
+
+![PM2.5 histogram](figures/PM2.5_hist.png)
+
+### 相关性热力图
+
+![Correlation heatmap](figures/correlation_heatmap.png)
+
 可以使用以下命令安装依赖：
 
 ```bash
