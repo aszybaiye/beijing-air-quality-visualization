@@ -1,25 +1,5 @@
-"""
-北京多站点空气质量数据集（Beijing Multi-Site Air-Quality Data Set）数据处理与可视化脚本
-
-说明：
-- 使用的数据来自压缩文件：Beijing Multi-Site Air-Quality Data Set.zip
-- 自动读取压缩包中的所有站点 CSV 文件并合并
-- 进行基础数据预处理和多种可视化分析
-- 使用到的可视化方法与课堂 notebook 中类似，包括：
-  * 缺失值矩阵（missingno.matrix）
-  * 直方图（hist）
-  * 折线图（line plot）
-  * 箱线图（boxplot）
-  * 相关性热力图（seaborn.heatmap）
-
-运行前请确认：
-1. 已安装所需库：
-   pip install pandas numpy matplotlib seaborn missingno
-2. 本脚本与 “Beijing Multi-Site Air-Quality Data Set.zip” 放在同一目录下，
-   或者在 main() 中修改 zip_path 为你的实际路径。
-"""
-
 import os
+import io
 import zipfile
 
 import numpy as np
@@ -27,58 +7,18 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import missingno as msno
+import streamlit as st
 
-# 一些绘图的全局设置（中文环境可根据需要调整字体）
-sns.set(style="whitegrid", font_scale=1.1)
+# 基本绘图风格
+sns.set(style="whitegrid", font_scale=1.0)
 plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
-
-
-def load_beijing_data(zip_path: str) -> pd.DataFrame:
-    """
-    从压缩文件中读取所有站点的 CSV，并合并成一个 DataFrame。
-
-    参数
-    ----
-    zip_path : str
-        Beijing Multi-Site Air-Quality Data Set.zip 的路径
-
-    返回
-    ----
-    data : pandas.DataFrame
-        合并后的数据集，包含所有站点
-    """
-    if not os.path.exists(zip_path):
-        raise FileNotFoundError(f"找不到压缩文件：{zip_path}")
-
-    print(f"正在从压缩文件读取数据：{zip_path}")
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        csv_files = [f for f in zf.namelist() if f.lower().endswith(".csv")]
-
-        if not csv_files:
-            raise ValueError("压缩文件中没有找到任何 CSV 文件。")
-
-        dfs = []
-        for fname in csv_files:
-            print(f"  读取文件：{fname}")
-            with zf.open(fname) as f:
-                df = pd.read_csv(f)
-                dfs.append(df)
-
-    data = pd.concat(dfs, ignore_index=True)
-    print(f"合并后数据形状：{data.shape}")
-    return data
 
 
 def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    根据 year, month, day, hour 构造时间相关特征（datetime, date, weekday 等），
-    类似于课堂中对时间字段的处理（提取 day、weekday、hour 等）。
-
-    返回处理后的新 DataFrame（不修改原 df）。
+    根据 year, month, day, hour 构造时间相关特征。
     """
     df = df.copy()
-
-    # 构造 datetime 列
     if {"year", "month", "day", "hour"}.issubset(df.columns):
         df["datetime"] = pd.to_datetime(
             df[["year", "month", "day", "hour"]],
@@ -87,149 +27,122 @@ def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
         df["date"] = df["datetime"].dt.date
         df["weekday"] = df["datetime"].dt.weekday
         df["hour_of_day"] = df["datetime"].dt.hour
-    else:
-        print("警告：缺少 year/month/day/hour 列，无法构造时间特征。")
-
+        df["month"] = df["datetime"].dt.month  # 保证有 month
     return df
 
 
-def basic_overview(df: pd.DataFrame) -> None:
+@st.cache_data(show_spinner=True)
+def load_beijing_data_from_zip_bytes(zip_bytes: bytes) -> pd.DataFrame:
     """
-    打印基本信息：前几行、info、描述性统计。
-    这些操作在课堂 notebook 中经常出现，用于快速了解数据结构。
+    从 zip 字节流读取所有 CSV 文件，并合并。
+    用于 Streamlit 的文件上传模式。
     """
-    print("\n===== 数据前 5 行（head） =====")
-    print(df.head())
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        csv_files = [f for f in zf.namelist() if f.lower().endswith(".csv")]
+        if not csv_files:
+            raise ValueError("压缩包中没有找到任何 CSV 文件。")
 
-    print("\n===== df.info() =====")
-    print(df.info())
+        dfs = []
+        for fname in csv_files:
+            with zf.open(fname) as f:
+                df = pd.read_csv(f)
+                dfs.append(df)
 
-    print("\n===== df.describe()（数值列） =====")
-    print(df.describe())
+    data = pd.concat(dfs, ignore_index=True)
+    data = create_time_features(data)
+    return data
 
 
-def plot_missing_matrix(df: pd.DataFrame, output_dir: str = "figures") -> None:
+@st.cache_data(show_spinner=True)
+def load_beijing_data_from_path(zip_path: str) -> pd.DataFrame:
     """
-    使用 missingno.matrix 进行缺失值可视化（抽样），
-    对应 notebook 中的缺失值可视化方法。
+    从本地路径读取 zip 文件并加载数据。
     """
-    os.makedirs(output_dir, exist_ok=True)
+    with open(zip_path, "rb") as f:
+        zip_bytes = f.read()
+    return load_beijing_data_from_zip_bytes(zip_bytes)
 
-    # 为了节省时间和内存，只抽样一部分行进行展示
+
+def show_basic_info(df: pd.DataFrame):
+    st.subheader("Basic Information / 数据基本信息")
+    st.write(f"数据维度：{df.shape[0]} 行 × {df.shape[1]} 列")
+    st.write("前 5 行：")
+    st.dataframe(df.head())
+
+    st.write("描述性统计：")
+    st.dataframe(df.describe())
+
+
+def show_missing_matrix(df: pd.DataFrame):
+    st.subheader("Missing Data Visualization / 缺失值可视化")
+
     sample_size = min(10000, len(df))
     sample_df = df.sample(n=sample_size, random_state=42)
 
-    msno.matrix(sample_df, figsize=(12, 6))
-    plt.title("缺失值可视化（随机抽样）")
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, "missing_matrix.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"缺失值矩阵已保存：{save_path}")
+    fig, ax = plt.subplots(figsize=(10, 4))
+    msno.matrix(sample_df, ax=ax)
+    st.pyplot(fig)
 
 
-def plot_pollutant_hist(df: pd.DataFrame,
-                        pollutant: str = "PM2.5",
-                        output_dir: str = "figures") -> None:
-    """
-    绘制指定污染物的直方图分布，对应 notebook 中的 hist 方法。
-    """
-    os.makedirs(output_dir, exist_ok=True)
+def show_pollutant_hist(df: pd.DataFrame):
+    st.subheader("Pollutant Distribution / 污染物分布直方图")
 
-    if pollutant not in df.columns:
-        print(f"列 {pollutant} 不在数据集中，跳过直方图绘制。")
+    candidate_cols = ["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]
+    cols = [c for c in candidate_cols if c in df.columns]
+    if not cols:
+        st.warning("找不到常见污染物列（PM2.5, PM10, SO2, NO2, CO, O3 等），无法绘制直方图。")
         return
 
-    plt.figure(figsize=(8, 4))
-    df[pollutant].dropna().plot(kind="hist", bins=50)
-    plt.xlabel(pollutant)
-    plt.ylabel("Frequency")
-    plt.title(f"{pollutant} 分布直方图")
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, f"{pollutant}_hist.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"{pollutant} 直方图已保存：{save_path}")
+    pollutant = st.selectbox("选择污染物 / Select pollutant", cols, index=0)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    df[pollutant].dropna().hist(bins=50, ax=ax)
+    ax.set_xlabel(pollutant)
+    ax.set_ylabel("Frequency")
+    ax.set_title(f"{pollutant} histogram")
+    st.pyplot(fig)
 
 
-def plot_pm25_time_series(df: pd.DataFrame,
-                          station: str = "Aotizhongxin",
-                          output_dir: str = "figures") -> None:
-    """
-    绘制指定站点 PM2.5 的时间序列折线图（按天平均），
-    对应 notebook 中常见的折线图 / 时间序列绘制。
-    """
-    os.makedirs(output_dir, exist_ok=True)
+def show_pm25_time_series_and_boxplot(df: pd.DataFrame):
+    if not {"station", "datetime", "PM2.5"}.issubset(df.columns):
+        st.warning("缺少 station / datetime / PM2.5 列，无法绘制时间序列和箱线图。")
+        return
 
-    if "station" not in df.columns:
-        print("数据集中没有 station 列，无法按站点筛选。")
-        return
-    if "datetime" not in df.columns:
-        print("数据集中没有 datetime 列，请先调用 create_time_features()。")
-        return
-    if "PM2.5" not in df.columns:
-        print("数据集中没有 PM2.5 列。")
-        return
+    st.subheader("PM2.5 Time Series & Monthly Boxplot")
+
+    stations = sorted(df["station"].dropna().unique().tolist())
+    default_index = stations.index("Aotizhongxin") if "Aotizhongxin" in stations else 0
+    station = st.selectbox("选择站点 / Select station", stations, index=default_index)
 
     subset = df[df["station"] == station].copy()
-    if subset.empty:
-        print(f"未找到站点 {station} 的数据，跳过时间序列绘制。")
-        return
-
+    subset = subset.dropna(subset=["datetime"])
     subset = subset.set_index("datetime").sort_index()
+
+    # 时间序列（日均）
     daily_pm25 = subset["PM2.5"].resample("D").mean()
 
-    plt.figure(figsize=(12, 4))
-    daily_pm25.plot()
-    plt.ylabel("PM2.5 (Daily Mean)")
-    plt.title(f"{station} 站点 PM2.5 日均时间序列")
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, f"PM25_timeseries_{station}.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"PM2.5 时间序列图已保存：{save_path}")
+    st.markdown(f"**{station} 站点 PM2.5 日均时间序列**")
+    fig, ax = plt.subplots(figsize=(10, 3))
+    daily_pm25.plot(ax=ax)
+    ax.set_ylabel("PM2.5 (Daily Mean)")
+    ax.set_xlabel("")
+    st.pyplot(fig)
+
+    # 按月份箱线图
+    if "month" not in subset.columns:
+        subset["month"] = subset.index.month
+
+    st.markdown(f"**{station} 站点 PM2.5 按月份箱线图**")
+    fig, ax = plt.subplots(figsize=(8, 3))
+    sns.boxplot(x="month", y="PM2.5", data=subset.reset_index(), ax=ax)
+    ax.set_xlabel("Month")
+    ax.set_ylabel("PM2.5")
+    st.pyplot(fig)
 
 
-def plot_pm25_box_by_month(df: pd.DataFrame,
-                           station: str = "Aotizhongxin",
-                           output_dir: str = "figures") -> None:
-    """
-    绘制指定站点 PM2.5 按月份的箱线图（boxplot），
-    对应 notebook 中的箱线图方法。
-    """
-    os.makedirs(output_dir, exist_ok=True)
+def show_correlation_heatmap(df: pd.DataFrame):
+    st.subheader("Correlation Heatmap / 相关性热力图")
 
-    required_cols = {"PM2.5", "month", "station"}
-    if not required_cols.issubset(df.columns):
-        print(f"缺少列 {required_cols}，无法绘制箱线图。")
-        return
-
-    subset = df[df["station"] == station].copy()
-    if subset.empty:
-        print(f"未找到站点 {station} 的数据，跳过箱线图绘制。")
-        return
-
-    plt.figure(figsize=(10, 4))
-    sns.boxplot(x="month", y="PM2.5", data=subset)
-    plt.xlabel("Month")
-    plt.ylabel("PM2.5")
-    plt.title(f"{station} 站点 PM2.5 按月份箱线图")
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, f"PM25_boxplot_month_{station}.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"PM2.5 箱线图已保存：{save_path}")
-
-
-def plot_correlation_heatmap(df: pd.DataFrame,
-                             output_dir: str = "figures") -> None:
-    """
-    绘制污染物与气象变量之间的相关性热力图，
-    对应 notebook 中的 seaborn.heatmap。
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 选择一些主要的数值列（可以根据需要调整）
     candidate_cols = [
         "PM2.5", "PM10", "SO2", "NO2", "CO", "O3",
         "TEMP", "PRES", "DEWP", "RAIN", "WSPM"
@@ -237,42 +150,86 @@ def plot_correlation_heatmap(df: pd.DataFrame,
     cols = [c for c in candidate_cols if c in df.columns]
 
     if len(cols) < 2:
-        print("可用于相关性分析的列不足，跳过热力图绘制。")
+        st.warning("可用于相关性分析的列不足（少于 2 列），无法绘制热力图。")
         return
 
     corr = df[cols].corr()
 
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", square=True)
-    plt.title("主要变量相关性热力图")
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, "correlation_heatmap.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"相关性热力图已保存：{save_path}")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", square=True, ax=ax)
+    st.pyplot(fig)
 
 
 def main():
-    # 这里假设压缩文件与本脚本在同一目录下
-    zip_path = "Beijing Multi-Site Air-Quality Data Set.zip"
+    st.title("Beijing Multi-Site Air Quality Visualization")
+    st.markdown(
+        """
+        这个应用基于 **Beijing Multi-Site Air-Quality Data Set**，  
+        提供常见的预处理与可视化操作，用于课程《数据可视化》 / 数据分析学习展示。
 
-    # 1. 读取并合并数据
-    df = load_beijing_data(zip_path)
+        **使用说明：**
 
-    # 2. 构造时间特征
-    df = create_time_features(df)
+        - 左侧可以选择数据来源（本地 ZIP 或上传 ZIP）
+        - 右侧展示数据基本信息、缺失值、分布、时间序列和相关性热力图
+        """
+    )
 
-    # 3. 输出基本结构信息
-    basic_overview(df)
+    st.sidebar.header("数据来源 / Data Source")
 
-    # 4. 可视化分析（可按需要注释/取消注释）
-    plot_missing_matrix(df, output_dir="figures")
-    plot_pollutant_hist(df, pollutant="PM2.5", output_dir="figures")
-    plot_pm25_time_series(df, station="Aotizhongxin", output_dir="figures")
-    plot_pm25_box_by_month(df, station="Aotizhongxin", output_dir="figures")
-    plot_correlation_heatmap(df, output_dir="figures")
+    mode = st.sidebar.radio(
+        "选择数据加载方式 / Choose how to load data",
+        ("使用本地 ZIP 文件（与脚本同目录）", "通过浏览器上传 ZIP 文件"),
+    )
 
-    print("\n所有图像已输出到 figures/ 文件夹中，可在报告或 PPT 中使用。")
+    df = None
+
+    if mode == "使用本地 ZIP 文件（与脚本同目录）":
+        default_zip = "Beijing Multi-Site Air-Quality Data Set.zip"
+        if os.path.exists(default_zip):
+            st.sidebar.success(f"找到本地数据文件：{default_zip}")
+            try:
+                df = load_beijing_data_from_path(default_zip)
+            except Exception as e:
+                st.error(f"读取本地 ZIP 时出错：{e}")
+        else:
+            st.sidebar.error(f"当前目录下未找到 {default_zip}，请检查文件名或改用上传方式。")
+
+    else:
+        uploaded_file = st.sidebar.file_uploader(
+            "上传数据压缩包（zip）/ Upload zip file",
+            type=["zip"]
+        )
+        if uploaded_file is not None:
+            try:
+                df = load_beijing_data_from_zip_bytes(uploaded_file.read())
+                st.sidebar.success("上传并加载数据成功！")
+            except Exception as e:
+                st.error(f"读取上传的 ZIP 时出错：{e}")
+
+    if df is None:
+        st.info("请先在左侧选择数据来源并成功加载数据。")
+        st.stop()
+
+    # 1. 数据基本信息
+    show_basic_info(df)
+
+    st.markdown("---")
+
+    # 2. 缺失值矩阵（可选）
+    if st.checkbox("显示缺失值矩阵 / Show missing data matrix"):
+        show_missing_matrix(df)
+        st.markdown("---")
+
+    # 3. 污染物直方图
+    show_pollutant_hist(df)
+    st.markdown("---")
+
+    # 4. PM2.5 时间序列 & 箱线图
+    show_pm25_time_series_and_boxplot(df)
+    st.markdown("---")
+
+    # 5. 相关性热力图
+    show_correlation_heatmap(df)
 
 
 if __name__ == "__main__":
