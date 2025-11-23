@@ -208,7 +208,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
             )
 
             # 可能是单个日期或元组，这里统一成 (start, end)
-            if isinstance(date_range, tuple) or isinstance(date_range, list):
+            if isinstance(date_range, (tuple, list)):
                 start_date, end_date = date_range
             else:
                 start_date = end_date = date_range
@@ -244,6 +244,15 @@ def show_kpi(df: pd.DataFrame):
 
 
 def main():
+    # ===== 顶部显示两个校徽 =====
+    logo_col1, logo_col2, _ = st.columns([1, 1, 2])
+    with logo_col1:
+        if os.path.exists("wut_logo.jpg"):
+            st.image("wut_logo.jpg", caption="Wuhan University of Technology", use_container_width=True)
+    with logo_col2:
+        if os.path.exists("efrei_logo.png"):
+            st.image("efrei_logo.png", caption="Efrei Paris", use_container_width=True)
+
     st.title("Beijing Multi-Site Air Quality Visualization")
 
     st.markdown(
